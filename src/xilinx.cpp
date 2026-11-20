@@ -475,7 +475,15 @@ Xilinx::Xilinx(Jtag *jtag, const std::string &filename,
 	}
 
 	if (read_xadc) {
-		if (_fpga_family == ARTIX_FAMILY || _fpga_family == KINTEXUS_FAMILY) {
+		if (_fpga_family == ARTIX_FAMILY || _fpga_family == KINTEX_FAMILY ||
+			_fpga_family == KINTEXUS_FAMILY ||
+			_fpga_family == KINTEXUSP_FAMILY) {
+			const bool is_kintexusp = _fpga_family == KINTEXUSP_FAMILY;
+			const double temp_scale = is_kintexusp ? 509.314  // ref: UG580
+				: 503.975; // ref: UG480 XACC
+			const double temp_offset = is_kintexusp ? 280.23  // ref: UG580
+				: 273.15; // ref: UG480 XACC
+
 			// calibrate XADC
 			Xilinx::xadc_single(8);
 
@@ -486,9 +494,12 @@ Xilinx::Xilinx(Jtag *jtag, const std::string &filename,
 			for (int i = 0; i < TEMP_MEAS; i++) {
 				v += Xilinx::xadc_single(XADC_TEMP);
 			}
-			double temp = ((v/(double)TEMP_MEAS) * 503.975)/(1 << 16) - 273.15;
-			double max_temp = (Xilinx::xadc_single(XADC_TEMP_MAX) * 503.975)/(1 << 16) - 273.15;
-			double min_temp = (Xilinx::xadc_single(XADC_TEMP_MIN) * 503.975)/(1 << 16) - 273.15;
+			double temp = ((v/(double)TEMP_MEAS) * temp_scale)/(1 << 16) -
+				temp_offset;
+			double max_temp = (Xilinx::xadc_single(XADC_TEMP_MAX) *
+				temp_scale)/(1 << 16) - temp_offset;
+			double min_temp = (Xilinx::xadc_single(XADC_TEMP_MIN) *
+				temp_scale)/(1 << 16) - temp_offset;
 
 			unsigned int channel_values[32];
 			for (int ch = 0; ch < MAX_CHANNEL; ch++) {
@@ -503,13 +514,19 @@ Xilinx::Xilinx(Jtag *jtag, const std::string &filename,
 				channel_values[ch] = v;
 			}
 
-			double vccint = (Xilinx::xadc_single(XADC_VCCINT)>>4)/4096.0 * 3.0; // ref: UG480
-			double vccintmax = (Xilinx::xadc_single(XADC_VCCINT + XADC_VCC_MAXOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
-			double vccintmin = (Xilinx::xadc_single(XADC_VCCINT + XADC_VCC_MINOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
+			double vccint = (Xilinx::xadc_single(XADC_VCCINT)>>4)/4096.0 *
+				3.0; // ref: UG480
+			double vccintmax = (Xilinx::xadc_single(XADC_VCCINT +
+				XADC_VCC_MAXOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
+			double vccintmin = (Xilinx::xadc_single(XADC_VCCINT +
+				XADC_VCC_MINOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
 
-			double vccaux = (Xilinx::xadc_single(XADC_VCCAUX)>>4)/4096.0 * 3.0; // ref: UG480
-			double vccauxmax = (Xilinx::xadc_single(XADC_VCCAUX + XADC_VCC_MAXOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
-			double vccauxmin = (Xilinx::xadc_single(XADC_VCCAUX + XADC_VCC_MINOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
+			double vccaux = (Xilinx::xadc_single(XADC_VCCAUX)>>4)/4096.0 *
+				3.0; // ref: UG480
+			double vccauxmax = (Xilinx::xadc_single(XADC_VCCAUX +
+				XADC_VCC_MAXOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
+			double vccauxmin = (Xilinx::xadc_single(XADC_VCCAUX +
+				XADC_VCC_MINOFFSET)>>4)/4096.0 * 3.0; // ref: UG480
 
 			/* output as JSON dict */
 			std::cout << "{";
@@ -530,7 +547,9 @@ Xilinx::Xilinx(Jtag *jtag, const std::string &filename,
 			std::cout << "   \"minvccaux\": " << vccauxmin << ", " << std::endl;
 			std::cout << "}" << std::endl;
 		} else {
-			throw std::runtime_error("Error: read_xadc only supported for Artix 7");
+			throw std::runtime_error(
+				"Error: read_xadc only supported for Artix 7 / Kintex 7 / "
+				"Kintex UltraScale / Kintex UltraScale+ devices");
 		}
 	}
 }
@@ -2290,11 +2309,12 @@ int Xilinx::spi_put(uint8_t cmd,
 	if (_soj_is_v2)
 		return spi_put_v2(cmd, tx, rx, len);
 
-	int xfer_len = len + 1 + ((rx == NULL) ? 0 : 1);
-	uint8_t jtx[xfer_len];
+	const uint32_t xfer_len = len + 1 + (rx ? 1 : 0);
+	resize_spi_buffers(xfer_len);
+	uint8_t *jtx = _spi_tx_buf.data();
+	uint8_t *jrx = _spi_rx_buf.data();
 	jtx[0] = McsParser::reverseByte(cmd);
 	/* uint8_t jtx[xfer_len] = {McsParser::reverseByte(cmd)}; */
-	uint8_t jrx[xfer_len];
 	if (tx != NULL) {
 		for (uint32_t i=0; i < len; i++)
 			jtx[i+1] = McsParser::reverseByte(tx[i]);
@@ -2310,30 +2330,6 @@ int Xilinx::spi_put(uint8_t cmd,
 	if (rx != NULL) {
 		for (uint32_t i=0; i < len; i++)
 			rx[i] = McsParser::reverseByte(jrx[i+1] >> 1) | (jrx[i+2] & 0x01);
-	}
-	return 0;
-}
-
-int Xilinx::spi_put(const uint8_t *tx, uint8_t *rx, uint32_t len)
-{
-	int xfer_len = len + ((rx == NULL) ? 0 : 1);
-	uint8_t jtx[xfer_len];
-	uint8_t jrx[xfer_len];
-	if (tx != NULL) {
-		for (uint32_t i=0; i < len; i++)
-			jtx[i] = McsParser::reverseByte(tx[i]);
-	}
-	/* addr BSCAN user1 */
-	_jtag->shiftIR(get_ircode(_ircode_map, _user_instruction), NULL, _irlen);
-	/* send first already stored cmd,
-	 * in the same time store each byte
-	 * to next
-	 */
-	_jtag->shiftDR(jtx, (rx == NULL)? NULL: jrx, 8*xfer_len);
-
-	if (rx != NULL) {
-		for (uint32_t i=0; i < len; i++)
-			rx[i] = McsParser::reverseByte(jrx[i] >> 1) | (jrx[i+1] & 0x01);
 	}
 	return 0;
 }
@@ -2395,10 +2391,12 @@ int Xilinx::spi_put_v2(uint8_t cmd, const uint8_t *tx, uint8_t *rx,
 		mode = 0x00;
 	}
 
+	resize_spi_buffers(kPktLen);
+
 	const uint32_t xfer_bit_len = (kPktLen - 1) * 8 + (rx ? 8 : 1);
 
-	uint8_t jrx[kPktLen];
-	uint8_t pkt[kPktLen];
+	uint8_t *pkt = _spi_tx_buf.data();
+	uint8_t *jrx = _spi_rx_buf.data();
 	uint32_t idx = 0;
 
 	pkt[idx++] = ((0x1f & real_len) << 3) | ((0x03 & mode) << 1) | 1;
