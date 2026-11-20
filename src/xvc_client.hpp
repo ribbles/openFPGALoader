@@ -121,6 +121,11 @@ class XVC_client: public JtagInterface {
 		void close_connection();
 
 		/*!
+		 * \brief cleanup/free resources uses
+		 */
+		void cleanup();
+
+		/*!
 		 * \brief sent instruction followed by tx buffer and read answer
 		 * \param[in] instr: ascii instruction
 		 * \param[in] tx: data buffer to send
